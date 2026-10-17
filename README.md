@@ -1,6 +1,6 @@
 # DeepSeek 标签捕手 (DeepSeek Tag Catcher)
 
-一款本地优先的浏览器扩展（Edge / Chrome），用于在 DeepSeek 网页版中划词记录重要信息，（无法提供跨分支的精准定位功能）。
+一款本地优先的浏览器扩展（Edge / Chrome），用于在 DeepSeek 网页版中划词记录重要信息。
 
 ## 功能特性
 - ✨ **划词打标**：在任意对话中划选文字，一键添加标签。
@@ -17,3 +17,7 @@
 ## 开发技术栈
 - 原生 JavaScript (Manifest V3)
 - Chrome Extension APIs (Storage, Tabs)
+
+## 局限说明
+1. 无法提供跨分支的精准定位功能，需要先手动切到对应分支
+2. 跨对话定位需要点击两次“跳转”
