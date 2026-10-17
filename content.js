@@ -61,6 +61,68 @@
     return result;
   }
 
+
+  // 极速扫描：大步长、极短延迟，用最快速度把对话翻一遍
+  async function fastScanAndJump(label) {
+    const scroller = findScrollContainer();
+    if (!scroller) return false;
+    
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const origTop = scroller.scrollTop;
+    const step = 1000; // 步长 1000px
+    
+    // 从顶部开始
+    scroller.scrollTop = 0;
+    await sleep(150);
+
+    let current = 0;
+    let found = false;
+
+    // 显示提示
+    const tip = document.createElement('div');
+    tip.textContent = '⚡ 快速扫描定位中…';
+    tip.style.cssText = 'position:fixed;bottom:30px;left:50%;transform:translateX(-50%);' +
+      'background:rgba(0,0,0,.82);color:#fff;padding:8px 16px;border-radius:8px;' +
+      'z-index:2147483647;font-size:13px;font-family:-apple-system,"PingFang SC",sans-serif;';
+    document.body.appendChild(tip);
+
+    try {
+      while (current < scroller.scrollHeight) {
+        // 检查当前视口
+        if (tryMatchMessageCandidates(label).length > 0) {
+          found = true;
+          break;
+        }
+
+        // 检查是否有需要切换的分页器
+        if (findPaginators().length > 0) {
+          if (await switchToBranchWith(label, 1500)) {
+            found = true;
+            break;
+          }
+        }
+
+        // 极短延迟向下滚动
+        current += step;
+        scroller.scrollTop = current;
+        await sleep(60); 
+      }
+
+      // 到底部了再查一次
+      if (!found && tryMatchMessageCandidates(label).length > 0) {
+        found = true;
+      }
+
+      if (!found) {
+        scroller.scrollTop = origTop;
+      }
+      return found;
+    } finally {
+      if (tip.parentNode) tip.parentNode.removeChild(tip);
+    }
+  }
+
+
   // 找所有形如 "N / N" 的分页器
   function findPaginators() {
     const result = [];
@@ -597,25 +659,28 @@
       console.log(`第 2 轮候选数: ${candidates.length}`, candidates.map(c => c.strategy + '/' + c.score));
     }
 
-        // 当前视口切换分页器（自动）
+            // 当前视口切换分页器
     if (candidates.length === 0) {
       console.log('尝试切换当前视口内的分页器...');
       const switched = await switchToBranchWith(label);
-      console.log('分支切换:', switched ? '✅ 命中' : '❌ 未命中');
       if (switched) {
         candidates = tryMatchMessageCandidates(label);
-        console.log(`切换后候选数: ${candidates.length}`, candidates.map(c => c.strategy + '/' + c.score));
+      }
+    }
+
+    // 如果当前视口还没有，启动极速扫描
+    if (candidates.length === 0) {
+      console.log('启动极速扫描...');
+      const found = await fastScanAndJump(label);
+      if (found) {
+        candidates = tryMatchMessageCandidates(label);
       }
     }
 
     console.groupEnd();
 
-    // 仍失败 → 提示用户手动定位
     if (candidates.length === 0) {
-      return {
-        ok: false,
-        reason: '当前视口没找到。请手动滚动到包含这段文字的提问附近（可配合 Ctrl+F 搜索），再点一次「跳转」'
-      };
+      return { ok: false, reason: '在整个对话中未找到该标签内容。可能对话已被修改或标签数据丢失。' };
     }
 
     // 遍历所有候选，找第一个能精确定位的
