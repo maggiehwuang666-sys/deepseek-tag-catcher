@@ -185,46 +185,44 @@ async function handleJump(id) {
   const current = tabs[0];
   const onDeepSeek = current && current.url && /deepseek\.com/.test(current.url);
 
+  // 1. 如果当前不在 DeepSeek 站点，直接开新标签页
   if (!onDeepSeek) {
     await chrome.tabs.create({ url: label.url });
-    showToast('已打开对话页面，页面加载完再点一次"跳转"');
+    showToast('已打开对话页面，页面加载完再点一次"跳转"', 4000);
     return;
   }
 
-  // 先 ping 一下，确认 content script 已注入
-  let pingRes = null;
+  // 2. 关键修复：如果当前 Tab 的 URL 与标签记录的 URL 不一致，直接切 URL，不发 jump 指令
+  if (normUrl(current.url) !== normUrl(label.url)) {
+    await chrome.tabs.update(current.id, { url: label.url });
+    showToast('已切换到对应对话，页面加载完再点一次"跳转"', 4000);
+    return;
+  }
+
+  // 3. 以下逻辑仅在 URL 一致时执行（说明在同一个对话里）
   try {
-    pingRes = await chrome.tabs.sendMessage(current.id, { type: 'ping' });
-  } catch (err) {
-    showToast('无法连接页面脚本，请刷新 DeepSeek 页面后重试', 4000);
-    return;
-  }
-
-  console.log('[Popup] ping 结果:', pingRes);
-
-  if (!pingRes || pingRes.msgCount === 0) {
-    showToast('当前页面未识别到任何消息，可能结构变化或正在加载', 4000);
-    return;
-  }
-
-  // 发跳转指令
-  try {
-    const res = await chrome.tabs.sendMessage(current.id, { type: 'jump', label });
-    console.log('[Popup] jump 结果:', res);
-
-    if (res && res.ok) { window.close(); return; }
-
-    // 找不到内容 → 可能不在同一对话
-    if (normUrl(current.url) !== normUrl(label.url)) {
-      await chrome.tabs.update(current.id, { url: label.url });
-      showToast('已切换到对应对话，页面加载完再点一次"跳转"', 4000);
+    // 先 ping 一下，确认页面脚本还活着
+    const pingRes = await chrome.tabs.sendMessage(current.id, { type: 'ping' });
+    if (!pingRes || pingRes.msgCount === 0) {
+      showToast('当前页面未加载完成或未识别到消息，请刷新页面重试', 4000);
       return;
     }
 
+    // 发送精准跳转指令
+    const res = await chrome.tabs.sendMessage(current.id, { type: 'jump', label });
+    console.log('[Popup] jump 结果:', res);
+
+    if (res && res.ok) {
+      window.close(); // 成功则自动关闭弹窗
+      return;
+    }
+
+    // 同 URL 但没找到（比如分支折叠了且极速扫描没扫到）
     showToast((res && res.reason) || '定位失败', 8000);
+
   } catch (err) {
     console.error('[Popup] 通信错误:', err);
-    showToast('通信失败，请刷新页面后重试', 4000);
+    showToast('通信失败，请刷新 DeepSeek 页面后重试', 4000);
   }
 }
 

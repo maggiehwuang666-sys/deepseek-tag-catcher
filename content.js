@@ -497,14 +497,18 @@
   }
 
   // ============ 消息监听 ============
-    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg.type === 'jump' && msg.label) {
-      try {
-        sendResponse(jumpToLabelWithLog(msg.label));
-      } catch (err) {
-        console.error('[DSC] 跳转异常:', err);
-        sendResponse({ ok: false, reason: '跳转异常：' + err.message });
-      }
+      // 因为 jumpToLabelWithLog 是 async 函数，必须用 .then 接收它 resolve 后的结果
+      jumpToLabelWithLog(msg.label)
+        .then(res => {
+          sendResponse(res);
+        })
+        .catch(err => {
+          console.error('[DSC] 跳转异常:', err);
+          sendResponse({ ok: false, reason: '跳转异常：' + err.message });
+        });
+      return true; // 必须返回 true 保持消息通道开启，等待异步 resolve
     } else if (msg.type === 'ping') {
       sendResponse({ ok: true, msgCount: findMessageNodes().length, url: location.href });
     }
