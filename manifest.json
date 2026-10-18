@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "DeepSeek 标签捕手",
-  "version": "0.1.0",
-  "description": "在 DeepSeek 网页版划词记录重点，随时回顾。",
+  "version": "0.2.0",
+  "description": "在 DeepSeek 网页版划词记录重点。",
   "permissions": ["storage", "tabs"],
   "host_permissions": [
     "https://chat.deepseek.com/*",
@@ -18,8 +18,10 @@
       "run_at": "document_idle"
     }
   ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "action": {
-    "default_popup": "popup.html",
-    "default_title": "标签捕手"
+    "default_title": "点击打开标签面板"
   }
 }

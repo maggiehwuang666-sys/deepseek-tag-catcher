@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+<title>DeepSeek 标签捕手</title>
 <meta charset="utf-8">
 <style>
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -20,19 +21,65 @@
   .actions button:hover { background: #f2f3f5; }
   .list { padding: 8px; }
   .item { background: #fff; border: 1px solid #eef0f3; border-radius: 10px;
-    padding: 10px 12px; margin-bottom: 8px; }
+    padding: 10px 12px; margin-bottom: 8px; cursor: grab; }
+  .item:active { cursor: grabbing; }
   .item .text { font-size: 13px; font-weight: 500; color: #1c1c1e;
     word-break: break-all; margin-bottom: 4px; }
   .item .meta { font-size: 10px; color: #888;
     display: flex; justify-content: space-between; align-items: center; }
   .item .meta .conv { flex: 1; overflow: hidden; white-space: nowrap;
     text-overflow: ellipsis; margin-right: 6px; }
-  .item .tools { display: flex; gap: 4px; margin-top: 6px; justify-content: flex-end; }
-  .item .tools button { background: none; border: 1px solid #e4e6eb;
-    border-radius: 4px; padding: 2px 8px; font-size: 11px; cursor: pointer;
-    color: #666; }
-  .item .tools button:hover { background: #e7f0ff; color: #1a73e8; border-color: #1a73e8; }
+  
+  /* 底部工具栏 */
+  .item .tools { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+  
+  /* 左侧：原文包裹层（包含文字和复制图标） */
+  .original-wrapper {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    overflow: hidden;
+    cursor: pointer;
+    padding: 2px 4px;
+    margin-left: -4px;
+    border-radius: 4px;
+    transition: background 0.2s;
+  }
+  .original-wrapper:hover {
+    background: #f0f2f5;
+  }
+  
+  .original-text { 
+    font-size: 11px; color: #aaa; 
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
+    transition: color 0.2s;
+  }
+  .original-wrapper:hover .original-text { 
+    color: #555; 
+  }
+  
+  /* 复制图标 */
+  .copy-icon { 
+    color: #ccc; 
+    display: flex; 
+    align-items: center; 
+    flex-shrink: 0; 
+    transition: color 0.2s;
+  }
+  .original-wrapper:hover .copy-icon { 
+    color: #1a73e8; 
+  }
+
+  /* 右侧按钮 */
+  .item .tools button.action-btn { 
+    background: none; border: 1px solid #e4e6eb; border-radius: 4px; 
+    padding: 2px 8px; font-size: 11px; cursor: pointer; color: #666; 
+    flex-shrink: 0;
+  }
+  .item .tools button.action-btn:hover { background: #e7f0ff; color: #1a73e8; border-color: #1a73e8; }
   .item .tools button.del:hover { background: #fef0f0; color: #e74c3c; border-color: #e74c3c; }
+  
   .empty { text-align: center; color: #bbb; padding: 40px 20px; font-size: 13px; }
   .edit-input { width: 100%; font-size: 13px; padding: 4px 6px;
     border: 1px solid #1a73e8; border-radius: 4px; outline: none; }
@@ -40,13 +87,10 @@
     background: rgba(0,0,0,.82); color: #fff; padding: 8px 14px;
     border-radius: 8px; font-size: 12px; z-index: 99; max-width: 90%;
     text-align: center; display: none; }
-
+    
   .item.dragging { opacity: 0.35; }
   .item.drag-over-top { border-top: 3px solid #1a73e8; margin-top: -1px; }
   .item.drag-over-bottom { border-bottom: 3px solid #1a73e8; margin-bottom: -1px; }
-  .item { cursor: grab; }
-  .item:active { cursor: grabbing; }
-
 </style>
 </head>
 <body>
