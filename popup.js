@@ -1,6 +1,7 @@
 const STORAGE_KEY = 'dsc_labels';
 let labels = [];
 let editingId = null;
+let dragId = null;
 
 const listEl = document.getElementById('list');
 
@@ -27,9 +28,6 @@ function showToast(msg, ms = 2600) {
   clearTimeout(t._timer);
   t._timer = setTimeout(() => { t.style.display = 'none'; }, ms);
 }
-function normUrl(u) {
-  try { const x = new URL(u); return x.origin + x.pathname; } catch { return u || ''; }
-}
 
 // ---------- 渲染 ----------
 function render() {
@@ -38,29 +36,44 @@ function render() {
     listEl.innerHTML = '<div class="empty">还没有标签<br>在 DeepSeek 页面划词添加吧</div>';
     return;
   }
+  
   const sorted = [...labels].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  listEl.innerHTML = sorted.map(l => {
+  
+      listEl.innerHTML = sorted.map(l => {
     const display = l.displayText || l.text;
     if (editingId === l.id) {
-      return `<div class="item" draggable="true" data-id="${l.id}">
+      return `<div class="item">
         <input class="edit-input" data-id="${l.id}" value="${escapeHtml(display)}">
       </div>`;
     }
+    
     return `<div class="item" draggable="true" data-id="${l.id}">
       <div class="text">${escapeHtml(display)}</div>
       <div class="meta">
         <span class="conv" title="${escapeHtml(l.convTitle || '')}">📁 ${escapeHtml(l.convTitle || '未命名')}</span>
         <span>${fmtTime(l.createdAt)}</span>
       </div>
+      
       <div class="tools">
-        <button data-action="jump" data-id="${l.id}">跳转</button>
-        <button data-action="edit" data-id="${l.id}">编辑</button>
-        <button class="del" data-action="delete" data-id="${l.id}">删除</button>
+        <!-- 原文和复制按钮作为一个整体 -->
+        <div class="original-wrapper" data-action="copy" data-id="${l.id}" title="点击复制原文">
+          <span class="original-text">原文：${escapeHtml(l.text)}</span>
+          <span class="copy-icon">
+            <svg viewBox="0 0 24 24" width="12" height="12" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg>
+          </span>
+        </div>
+        
+        <!-- 右侧按钮 -->
+        <button data-action="edit" data-id="${l.id}" class="action-btn" draggable="false">编辑</button>
+        <button data-action="delete" data-id="${l.id}" class="action-btn del" draggable="false">删除</button>
       </div>
     </div>`;
   }).join('');
 
-  // 编辑态：绑事件 + 自动聚焦
+  // 绑定编辑框事件
   if (editingId) {
     const input = listEl.querySelector(`.edit-input[data-id="${editingId}"]`);
     if (input) {
@@ -76,18 +89,17 @@ function render() {
 
 // ---------- 事件委托：列表点击 ----------
 listEl.addEventListener('click', async (e) => {
-  const btn = e.target.closest('button[data-action]');
+  const btn = e.target.closest('[data-action]');
   if (!btn) return;
   const action = btn.dataset.action;
   const id = btn.dataset.id;
-  if (action === 'jump') await handleJump(id);
-  else if (action === 'edit') { editingId = id; render(); }
+  
+  if (action === 'edit') { editingId = id; render(); }
   else if (action === 'delete') await handleDelete(id);
+  else if (action === 'copy') await copyText(id, e);
 });
 
-// ---------- 拖拽排序 ----------
-let dragId = null;
-
+// ---------- 事件委托：拖拽排序 ----------
 listEl.addEventListener('dragstart', (e) => {
   const item = e.target.closest('.item');
   if (!item || !item.draggable) return;
@@ -140,21 +152,6 @@ listEl.addEventListener('dragend', () => {
   dragId = null;
 });
 
-async function reorderLabels(fromId, toId, insertBefore) {
-  const sorted = [...labels].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
-  const fromIdx = sorted.findIndex(l => l.id === fromId);
-  if (fromIdx === -1) return;
-  const [moved] = sorted.splice(fromIdx, 1);
-  let toIdx = sorted.findIndex(l => l.id === toId);
-  if (toIdx === -1) { sorted.splice(fromIdx, 0, moved); return; }
-  if (!insertBefore) toIdx += 1;
-  sorted.splice(toIdx, 0, moved);
-  // sorted 里的对象和 labels 里是同一批引用，直接改 order
-  sorted.forEach((l, i) => { l.order = i; });
-  await setLabels(labels);
-  render();
-}
-
 // ---------- 行为 ----------
 async function saveEdit(id) {
   if (editingId !== id) return;
@@ -177,62 +174,35 @@ async function handleDelete(id) {
   render();
 }
 
-async function handleJump(id) {
+async function copyText(id, event) {
+  if (event) event.stopPropagation();
   const label = labels.find(l => l.id === id);
   if (!label) return;
-
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const current = tabs[0];
-  const onDeepSeek = current && current.url && /deepseek\.com/.test(current.url);
-
-  // 1. 如果当前不在 DeepSeek 站点，直接开新标签页
-  if (!onDeepSeek) {
-    await chrome.tabs.create({ url: label.url });
-    showToast('已打开对话页面，页面加载完再点一次"跳转"', 4000);
-    return;
-  }
-
-  // 2. 关键修复：如果当前 Tab 的 URL 与标签记录的 URL 不一致，直接切 URL，不发 jump 指令
-  if (normUrl(current.url) !== normUrl(label.url)) {
-    await chrome.tabs.update(current.id, { url: label.url });
-    showToast('已切换到对应对话，页面加载完再点一次"跳转"', 4000);
-    return;
-  }
-
-  // 3. 以下逻辑仅在 URL 一致时执行（说明在同一个对话里）
   try {
-    // 先 ping 一下，确认页面脚本还活着
-    const pingRes = await chrome.tabs.sendMessage(current.id, { type: 'ping' });
-    if (!pingRes || pingRes.msgCount === 0) {
-      showToast('当前页面未加载完成或未识别到消息，请刷新页面重试', 4000);
-      return;
-    }
-
-    // 发送精准跳转指令
-    const res = await chrome.tabs.sendMessage(current.id, { type: 'jump', label });
-    console.log('[Popup] jump 结果:', res);
-
-    if (res && res.ok) {
-      window.close(); // 成功则自动关闭弹窗
-      return;
-    }
-
-    // 同 URL 但没找到（比如分支折叠了且极速扫描没扫到）
-    showToast((res && res.reason) || '定位失败', 8000);
-
+    await navigator.clipboard.writeText(label.text);
+    showToast('✅ 已复制原文');
   } catch (err) {
-    console.error('[Popup] 通信错误:', err);
-    showToast('通信失败，请刷新 DeepSeek 页面后重试', 4000);
+    showToast('❌ 复制失败，请手动选中复制');
   }
+}
+
+async function reorderLabels(fromId, toId, insertBefore) {
+  const sorted = [...labels].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const fromIdx = sorted.findIndex(l => l.id === fromId);
+  if (fromIdx === -1) return;
+  const [moved] = sorted.splice(fromIdx, 1);
+  let toIdx = sorted.findIndex(l => l.id === toId);
+  if (toIdx === -1) { sorted.splice(fromIdx, 0, moved); return; }
+  if (!insertBefore) toIdx += 1;
+  sorted.splice(toIdx, 0, moved);
+  sorted.forEach((l, i) => { l.order = i; });
+  await setLabels(labels);
+  render();
 }
 
 // ---------- 导出 / 导入 ----------
 document.getElementById('exportBtn').addEventListener('click', () => {
-  const data = {
-    version: '1.0',
-    exportTime: new Date().toISOString(),
-    labels
-  };
+  const data = { version: '1.0', exportTime: new Date().toISOString(), labels };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -256,7 +226,6 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
       if (!data.labels || !Array.isArray(data.labels)) throw new Error('格式错误');
       const existing = new Set(labels.map(l => l.id));
       let added = 0;
-      // 新导入的标签排在最前：从当前最小 order - 1 开始递减
       let minOrder = labels.reduce((m, l) => Math.min(m, typeof l.order === 'number' ? l.order : 0), 0);
       for (const l of data.labels) {
         if (!existing.has(l.id)) {
@@ -264,7 +233,6 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
           added++;
         }
       }
-
       await setLabels(labels);
       render();
       showToast(`导入成功，新增 ${added} 个标签`);
@@ -279,13 +247,11 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
 // ---------- 启动 ----------
 (async () => {
   labels = await getLabels();
-  // 迁移：如果标签没有 order 字段，按 createdAt 升序初始化（老标签保留原添加顺序）
   const needInit = labels.some(l => typeof l.order !== 'number');
   if (needInit) {
     const byTime = [...labels].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
     byTime.forEach((l, i) => { l.order = i; });
     await setLabels(labels);
-    console.log('已初始化', labels.length, '个标签的 order 字段');
   }
   render();
 })();
