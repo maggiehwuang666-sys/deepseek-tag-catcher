@@ -17,6 +17,7 @@ function setLabels(l) {
 function escapeHtml(t) {
   return String(t).replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]));
 }
+
 function fmtTime(ts) {
   const d = new Date(ts);
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
@@ -28,6 +29,15 @@ function showToast(msg, ms = 2600) {
   clearTimeout(t._timer);
   t._timer = setTimeout(() => { t.style.display = 'none'; }, ms);
 }
+
+// ---------- 监听 storage 变化，实时刷新列表 ----------
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== 'local' || !changes[STORAGE_KEY]) return;
+  labels = changes[STORAGE_KEY].newValue || [];
+  // 正在编辑或拖拽时不要打断，等交互结束自然 re-render
+  if (editingId || dragId) return;
+  render();
+});
 
 // ---------- 渲染 ----------
 function render() {
@@ -160,8 +170,16 @@ async function saveEdit(id) {
   const v = input.value.trim();
   const label = labels.find(l => l.id === id);
   if (label && v && v !== label.displayText) {
+    const oldTitle = label.displayText;
     label.displayText = v;
     await setLabels(labels);
+    chrome.runtime.sendMessage({
+      type: 'log_event',
+      evt: {
+        event: 'label_edit',
+        meta: { id, oldTitle, newTitle: v },
+      },
+    }, () => void chrome.runtime.lastError);
   }
   editingId = null;
   render();
@@ -169,8 +187,22 @@ async function saveEdit(id) {
 
 async function handleDelete(id) {
   if (!confirm('确定删除这个标签吗？')) return;
+  const label = labels.find(l => l.id === id);
   labels = labels.filter(l => l.id !== id);
   await setLabels(labels);
+  if (label) {
+    chrome.runtime.sendMessage({
+      type: 'log_event',
+      evt: {
+        event: 'label_delete',
+        meta: {
+          id,
+          title: label.displayText || label.text,
+          text: label.text,
+        },
+      },
+    }, () => void chrome.runtime.lastError);
+  }
   render();
 }
 
@@ -181,6 +213,17 @@ async function copyText(id, event) {
   try {
     await navigator.clipboard.writeText(label.text);
     showToast('✅ 已复制原文');
+    chrome.runtime.sendMessage({
+      type: 'log_event',
+      evt: {
+        event: 'label_copy',
+        meta: {
+          id,
+          title: label.displayText || label.text,
+          text: label.text,
+        },
+      },
+    }, () => void chrome.runtime.lastError);
   } catch (err) {
     showToast('❌ 复制失败，请手动选中复制');
   }
@@ -188,6 +231,8 @@ async function copyText(id, event) {
 
 async function reorderLabels(fromId, toId, insertBefore) {
   const sorted = [...labels].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+  const beforeOrder = sorted.map(l => l.id).join(',');
+
   const fromIdx = sorted.findIndex(l => l.id === fromId);
   if (fromIdx === -1) return;
   const [moved] = sorted.splice(fromIdx, 1);
@@ -196,9 +241,41 @@ async function reorderLabels(fromId, toId, insertBefore) {
   if (!insertBefore) toIdx += 1;
   sorted.splice(toIdx, 0, moved);
   sorted.forEach((l, i) => { l.order = i; });
+
+  const afterOrder = sorted.map(l => l.id).join(',');
   await setLabels(labels);
+
+  if (beforeOrder !== afterOrder) {
+    const movedLabel = labels.find(l => l.id === fromId);
+    const targetLabel = labels.find(l => l.id === toId);
+    if (movedLabel && targetLabel) {
+      chrome.runtime.sendMessage({
+        type: 'log_event',
+        evt: {
+          event: 'label_reorder',
+          meta: {
+            id: fromId,
+            title: movedLabel.displayText || movedLabel.text,
+            targetId: toId,
+            targetTitle: targetLabel.displayText || targetLabel.text,
+            position: insertBefore ? 'before' : 'after',
+          },
+        },
+      }, () => void chrome.runtime.lastError);
+    }
+  }
   render();
 }
+
+
+document.getElementById('logBtn').addEventListener('click', () => {
+  chrome.windows.create({
+    url: chrome.runtime.getURL('logs.html'),
+    type: 'popup',
+    width: 800,
+    height: 640,
+  });
+});
 
 // ---------- 导出 / 导入 ----------
 document.getElementById('exportBtn').addEventListener('click', () => {
@@ -210,11 +287,17 @@ document.getElementById('exportBtn').addEventListener('click', () => {
   a.download = `DeepSeek标签备份_${new Date().toISOString().slice(0,10)}.json`;
   a.click();
   URL.revokeObjectURL(url);
+
+chrome.runtime.sendMessage({
+    type: 'log_event',
+    evt: { event: 'label_export', meta: { count: labels.length } },
+  }, () => void chrome.runtime.lastError);
 });
 
 document.getElementById('importBtn').addEventListener('click', () => {
   document.getElementById('importFile').click();
 });
+
 
 document.getElementById('importFile').addEventListener('change', async (e) => {
   const file = e.target.files[0];
@@ -225,17 +308,26 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
       const data = JSON.parse(ev.target.result);
       if (!data.labels || !Array.isArray(data.labels)) throw new Error('格式错误');
       const existing = new Set(labels.map(l => l.id));
-      let added = 0;
+      const addedItems = [];
       let minOrder = labels.reduce((m, l) => Math.min(m, typeof l.order === 'number' ? l.order : 0), 0);
       for (const l of data.labels) {
         if (!existing.has(l.id)) {
           labels.push({ ...l, order: --minOrder });
-          added++;
+          addedItems.push({ id: l.id, title: l.displayText || l.text });
         }
       }
       await setLabels(labels);
       render();
+      const added = addedItems.length;
+      const skipped = data.labels.length - added;
       showToast(`导入成功，新增 ${added} 个标签`);
+      chrome.runtime.sendMessage({
+        type: 'log_event',
+        evt: {
+          event: 'label_import',
+          meta: { total: data.labels.length, added, skipped, items: addedItems },
+        },
+      }, () => void chrome.runtime.lastError);
     } catch (err) {
       showToast('导入失败：' + err.message);
     }
@@ -254,4 +346,14 @@ document.getElementById('importFile').addEventListener('change', async (e) => {
     await setLabels(labels);
   }
   render();
+
+// 上报"面板打开"（只在 IIFE 启动时发一次）
+  chrome.windows.getCurrent(win => {
+    chrome.runtime.sendMessage({
+      type: 'panel_opened',
+      windowId: win.id,
+      labelCount: labels.length,
+    }, () => void chrome.runtime.lastError);
+  });
+
 })();

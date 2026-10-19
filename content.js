@@ -133,6 +133,21 @@
     const msgFingerprint = nodeText.replace(/\s+/g, '').slice(0, 50);
     const label = { id: genId(), url: location.href, convTitle: getConvTitle(), text, displayText: text, contextBefore, contextAfter, msgFingerprint, createdAt: Date.now() };
     const ok = await addLabel(label);
+   if (ok) {
+  chrome.runtime.sendMessage({
+    type: 'log_event',
+    evt: {
+      event: 'label_add',
+      meta: {
+        id: label.id,
+        title: label.displayText,
+        convTitle: label.convTitle,
+        text: label.text,
+      },
+    },
+  }, () => void chrome.runtime.lastError);
+}
+
     tooltipEl.className = 'tip saved';
     tooltipEl.innerHTML = ok ? '<span style="font-size:15px;">✅</span> 已保存' : '<span style="font-size:15px;">ℹ️</span> 已存在';
     setTimeout(hideTooltip, 800);
